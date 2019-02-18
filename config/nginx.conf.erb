@@ -1,28 +1,31 @@
 daemon off;
-worker_processes 4;
+worker_processes <%= ENV['NGINX_WORKERS'] || 4 %>;
 
 events {
   use epoll;
-  accept_mutex on;
-  worker_connections 1024;
+  worker_connections 4096;
+  multi_accept on;
 }
 
 http {
-  gzip on;
-  gzip_comp_level 2;
-  gzip_min_length 512;
-
+  real_ip_header X-Forwarded-For;
   server_tokens off;
-
   log_format l2met 'measure#nginx.service=$request_time request_id=$http_x_request_id';
   access_log logs/nginx/access.log l2met;
   error_log logs/nginx/error.log;
-
-  include mime.types;
   default_type application/octet-stream;
+  include mime.types;
   sendfile on;
-
-  client_body_timeout 5;
+  tcp_nopush on;
+  tcp_nodelay on;
+  client_body_buffer_size 10K;
+  client_header_buffer_size 4k;
+  client_max_body_size 8m;
+  large_client_header_buffers 2 4k;
+  client_body_timeout 12;
+  client_header_timeout 12;
+  keepalive_timeout 15;
+  send_timeout 10;
 
   upstream app_server {
     server unix:/tmp/nginx.socket fail_timeout=0;
@@ -32,12 +35,93 @@ http {
     listen <%= ENV["PORT"] %>;
     server_name _;
     keepalive_timeout 5;
+    charset utf-8;
+
+    location ~ /\. {
+      deny all;
+      access_log off;
+      log_not_found off;
+      return 404;
+    }
+
+    location ~ ^/(robots.txt|humans.txt|favicon.ico) {
+      access_log off;
+      log_not_found off;
+      expires max;
+    }
+
+    location ~* \.(?:eot|ttf|svg)$ {
+      access_log off;
+      log_not_found off;
+      add_header Vary "Accept-Encoding";
+    }
 
     location / {
       proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+      proxy_set_header X-Real-IP $remote_addr;
       proxy_set_header Host $http_host;
-      proxy_redirect off;
       proxy_pass http://app_server;
+      proxy_redirect off;
     }
+
+    gzip on;
+    gzip_comp_level 5;
+    gzip_min_length 100;
+    gzip_vary on;
+    gzip_buffers 16 8k;
+    gzip_proxied any;
+    gzip_static on;
+    gzip_types
+      application/javascript
+      application/x-javascript
+      application/json
+      application/vnd.ms-fontobject
+      application/x-font-ttf
+      application/x-web-app-manifest+json
+      application/xhtml+xml
+      application/xml
+      font/opentype
+      image/svg+xml
+      image/x-icon
+      text/html
+      text/css
+      text/plain
+      text/javascript
+      text/x-component;
+    gzip_disable "MSIE [1-6]\.";
+
+    pagespeed on;
+    pagespeed FileCachePath /app/tmp/;
+    pagespeed XHeaderValue "pagespeed";
+    pagespeed PreserveUrlRelativity on;
+    pagespeed LowercaseHtmlNames on;
+    pagespeed ModifyCachingHeaders off;
+    pagespeed Statistics off;
+    pagespeed AvoidRenamingIntrospectiveJavascript off;
+    pagespeed MaxCacheableContentLength -1;
+    pagespeed UseExperimentalJsMinifier on;
+    pagespeed RewriteLevel CoreFilters;
+    pagespeed EnableFilters collapse_whitespace;
+    pagespeed EnableFilters remove_comments;
+    pagespeed EnableFilters remove_quotes;
+    pagespeed EnableFilters rewrite_images;
+    pagespeed EnableFilters lazyload_images;
+    pagespeed EnableFilters defer_javascript;
+    pagespeed EnableFilters rewrite_javascript;
+    pagespeed EnableFilters inline_css;
+    pagespeed EnableFilters combine_css;
+    pagespeed EnableFilters prioritize_critical_css;
+    pagespeed EnableFilters rewrite_css;
+    pagespeed EnableFilters fallback_rewrite_css_urls;
+    pagespeed EnableFilters inline_google_font_css;
+    pagespeed EnableFilters insert_dns_prefetch;
+    pagespeed EnableFilters extend_cache;
+
+    location ~ "\.pagespeed\.([a-z]\.)?[a-z]{2}\.[^.]{10}\.[^.]+" {
+      add_header "" "";
+    }
+
+    location ~ "^/pagespeed_static/" { }
+    location ~ "^/ngx_pagespeed_beacon$" { }
   }
 }
